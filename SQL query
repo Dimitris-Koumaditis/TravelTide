@@ -1,167 +1,259 @@
--- Step 1: Filter sessions data to include only sessions that started on or after '2023-01-04'.
-WITH FilteredSessions AS (
+ -- Step 1: Filter sessions data to include only sessions that started on or after '2023-01-04'.
+WITH
+  FilteredSessions AS (
+    SELECT
+      user_id,
+      session_id,
+      session_start,
+      session_end,
+      page_clicks,
+      flight_discount,
+      hotel_discount,
+      flight_booked,
+      hotel_booked,
+      cancellation,
+      trip_id
+    FROM
+      sessions
+    WHERE
+      session_start >= '2023-01-04'
+  ),
+  -- Step 2: Aggregate session data to calculate various session-related metrics.
+  AggregatedSessions AS (
+    SELECT
+      user_id,
+      COUNT(DISTINCT session_id) AS num_sessions,
+      SUM(page_clicks) AS total_page_clicks,
+      COUNT(
+        CASE
+          WHEN flight_discount = TRUE THEN 1
+        END
+      ) AS total_flight_discount,
+      COUNT(
+        CASE
+          WHEN hotel_discount = TRUE THEN 1
+        END
+      ) AS total_hotel_discount,
+      COUNT(
+        CASE
+          WHEN flight_booked = TRUE THEN 1
+        END
+      ) AS total_flights_booked,
+      COUNT(
+        CASE
+          WHEN hotel_booked = TRUE THEN 1
+        END
+      ) AS total_hotels_booked,
+      COUNT(
+        CASE
+          WHEN cancellation = TRUE THEN 1
+        END
+      ) AS total_cancellations
+    FROM
+      FilteredSessions
+    GROUP BY
+      user_id
+    HAVING
+      COUNT(DISTINCT session_id) > 7
+  ),
+  -- Step 3: Retrieve flights-related data for each user.
+  FlightsData AS (
+    SELECT
+      fs.user_id,
+      SUM(f.checked_bags) AS total_checked_bags,
+      MAX(f.destination_airport_lat) AS destination_airport_lat,
+      MAX(f.destination_airport_lon) AS destination_airport_lon,
+      MAX(f.departure_time) AS departure_time,
+      MAX(f.return_time) AS return_time
+    FROM
+      FilteredSessions fs
+      JOIN flights f ON fs.trip_id = f.trip_id
+    GROUP BY
+      fs.user_id
+  ),
+  -- Subquery 5: Get the latest session start, end, and trip_id for each user.
+  LatestSessions AS (
+    SELECT
+      fs.user_id,
+      MAX(fs.session_start) AS session_start,
+      MAX(fs.session_end) AS session_end,
+      MAX(fs.trip_id) AS trip_id
+    FROM
+      FilteredSessions fs
+    GROUP BY
+      fs.user_id
+  ),
+  -- Subquery 6: Calculate the total seats booked by each user.
+  TotalSeats AS (
+    SELECT
+      fs.user_id,
+      SUM(f.seats) AS seats
+    FROM
+      FilteredSessions fs
+      JOIN flights f ON fs.trip_id = f.trip_id
+    GROUP BY
+      fs.user_id
+  ),
+  -- Subquery 7: Calculate the total hotel rooms booked by each user.
+  TotalRooms AS (
+    SELECT
+      fs.user_id,
+      SUM(h.rooms) AS rooms
+    FROM
+      FilteredSessions fs
+      JOIN hotels h ON fs.trip_id = h.trip_id
+    GROUP BY
+      fs.user_id
+  ),
+  -- Subquery 8: Identify luxury travelers
+  LuxuryTravelers AS (
+    SELECT
+      u.user_id
+    FROM
+      users u
+      JOIN (
+        SELECT
+          fs.user_id,
+          SUM(
+            f.base_fare_usd + h.hotel_per_room_usd * h.rooms * h.nights
+          ) AS total_spent
+        FROM
+          FilteredSessions fs
+          JOIN flights f ON fs.trip_id = f.trip_id
+          JOIN hotels h ON fs.trip_id = h.trip_id
+        GROUP BY
+          fs.user_id
+        HAVING
+          SUM(
+            f.base_fare_usd + h.hotel_per_room_usd * h.rooms * h.nights
+          ) > 5000
+        LIMIT
+          240
+      ) luxury ON u.user_id = luxury.user_id
+  ),
+  -- Subquery 9: Identify budget travelers
+  BudgetTravelers AS (
+    SELECT
+      u.user_id
+    FROM
+      users u
+      JOIN (
+        SELECT
+          fs.user_id
+        FROM
+          FilteredSessions fs
+        WHERE
+          fs.flight_discount = TRUE
+          OR fs.hotel_discount = TRUE
+        GROUP BY
+          fs.user_id
+        HAVING
+          COUNT(DISTINCT fs.session_id) > 1
+        ORDER BY
+          COUNT(DISTINCT fs.session_id) DESC
+        LIMIT
+          554
+      ) budget ON u.user_id = budget.user_id
+  )
+  -- Combine all data to create a comprehensive dataset and apply segmentation
 SELECT
-user_id,
-session_id,
-session_start,
-session_end,
-page_clicks,
-flight_discount,
-hotel_discount,
-flight_booked,
-hotel_booked,
-cancellation,
-trip_id
-FROM sessions
-WHERE session_start >= '2023-01-04'
-),
--- Step 2: Aggregate session data to calculate various session-related metrics.
-AggregatedSessions AS (
-SELECT
-user_id,
-COUNT(DISTINCT session_id) AS num_sessions,
-SUM(page_clicks) AS total_page_clicks,
-COUNT(CASE WHEN flight_discount = TRUE THEN 1 END) AS total_flight_discount,
-COUNT(CASE WHEN hotel_discount = TRUE THEN 1 END) AS total_hotel_discount,
-COUNT(CASE WHEN flight_booked = TRUE THEN 1 END) AS total_flights_booked,
-COUNT(CASE WHEN hotel_booked = TRUE THEN 1 END) AS total_hotels_booked,
-COUNT(CASE WHEN cancellation = TRUE THEN 1 END) AS total_cancellations
-FROM FilteredSessions
-GROUP BY user_id
-HAVING COUNT(DISTINCT session_id) > 7
-),
--- Step 3: Retrieve flights-related data for each user.
-FlightsData AS (
-SELECT
-fs.user_id,
-SUM(f.checked_bags) AS total_checked_bags,
-MAX(f.destination_airport_lat) AS destination_airport_lat,
-MAX(f.destination_airport_lon) AS destination_airport_lon,
-MAX(f.departure_time) AS departure_time,
-MAX(f.return_time) AS return_time
-FROM FilteredSessions fs
-JOIN flights f ON fs.trip_id = f.trip_id
-GROUP BY fs.user_id
-),
--- Subquery 5: Get the latest session start, end, and trip_id for each user.
-LatestSessions AS (
-SELECT
-fs.user_id,
-MAX(fs.session_start) AS session_start,
-MAX(fs.session_end) AS session_end,
-MAX(fs.trip_id) AS trip_id
-FROM FilteredSessions fs
-GROUP BY fs.user_id
-),
--- Subquery 6: Calculate the total seats booked by each user.
-TotalSeats AS (
-SELECT
-fs.user_id,
-SUM(f.seats) AS seats
-FROM FilteredSessions fs
-JOIN flights f ON fs.trip_id = f.trip_id
-GROUP BY fs.user_id
-),
--- Subquery 7: Calculate the total hotel rooms booked by each user.
-TotalRooms AS (
-SELECT
-fs.user_id,
-SUM(h.rooms) AS rooms
-FROM FilteredSessions fs
-JOIN hotels h ON fs.trip_id = h.trip_id
-GROUP BY fs.user_id
-),
--- Subquery 8: Identify luxury travelers
-LuxuryTravelers AS (
-SELECT
-u.user_id
-FROM users u
-JOIN (
-SELECT
-fs.user_id,
-SUM(f.base_fare_usd + h.hotel_per_room_usd * h.rooms * h.nights) AS total_spent
-FROM FilteredSessions fs
-JOIN flights f ON fs.trip_id = f.trip_id
-JOIN hotels h ON fs.trip_id = h.trip_id
-GROUP BY fs.user_id
-HAVING SUM(f.base_fare_usd + h.hotel_per_room_usd * h.rooms * h.nights) > 5000
-LIMIT 240
-) luxury ON u.user_id = luxury.user_id
-),
--- Subquery 9: Identify budget travelers
-BudgetTravelers AS (
-SELECT
-u.user_id
-FROM users u
-JOIN (
-SELECT
-fs.user_id
-FROM FilteredSessions fs
-WHERE fs.flight_discount = TRUE OR fs.hotel_discount = TRUE
-GROUP BY fs.user_id
-HAVING COUNT(DISTINCT fs.session_id) > 1
-ORDER BY COUNT(DISTINCT fs.session_id) DESC
-LIMIT 554
-) budget ON u.user_id = budget.user_id
-)
--- Combine all data to create a comprehensive dataset and apply segmentation
-SELECT
-u.user_id,
-EXTRACT(YEAR FROM AGE(u.birthdate)) AS age,
-u.gender,
-u.married,
-u.has_children,
-u.home_country,
-u.home_city,
-u.home_airport,
-u.sign_up_date,
-a.num_sessions,
-a.total_page_clicks,
-a.total_flight_discount,
-a.total_hotel_discount,
-a.total_flights_booked,
-a.total_hotels_booked,
-a.total_cancellations,
-fd.total_checked_bags,
-fd.destination_airport_lat,
-fd.destination_airport_lon,
-u.home_airport_lat,
-u.home_airport_lon,
-fl.seats,
-h.rooms,
-fd.departure_time,
-fd.return_time,
-ls.session_start,
-ls.session_end,
-ls.trip_id,
-CASE
-WHEN u.married = TRUE AND u.has_children = TRUE AND fl.seats > 2 AND
-fd.total_checked_bags > 2 THEN 'Family travelers'
-WHEN EXTRACT(YEAR FROM AGE(u.birthdate)) BETWEEN 30 AND 50 AND
-a.total_flights_booked + a.total_hotels_booked > 5 AND h.rooms > 0 AND h.rooms < 3 THEN
-'Business travelers'
-WHEN u.user_id IN (SELECT user_id FROM LuxuryTravelers) THEN 'Luxury travelers'
-WHEN u.user_id IN (SELECT user_id FROM BudgetTravelers) THEN 'Budget travelers'
-WHEN a.num_sessions > 10 AND a.total_cancellations > 0 THEN 'Unsure travelers'
-ELSE 'Other travelers'
-END AS customer_segment,
-CASE
-WHEN u.married = TRUE AND u.has_children = TRUE AND fl.seats > 2 AND
-fd.total_checked_bags > 2 THEN 'Free check In for bags'
-WHEN EXTRACT(YEAR FROM AGE(u.birthdate)) BETWEEN 30 AND 50 AND
-a.total_flights_booked + a.total_hotels_booked > 5 AND h.rooms > 0 AND h.rooms < 3 THEN
-'Priority Boarding on the plane'
-WHEN u.user_id IN (SELECT user_id FROM LuxuryTravelers) THEN 'Free transportation from
+  u.user_id,
+  EXTRACT(
+    YEAR
+    FROM
+      AGE (u.birthdate)
+  ) AS age,
+  u.gender,
+  u.married,
+  u.has_children,
+  u.home_country,
+  u.home_city,
+  u.home_airport,
+  u.sign_up_date,
+  a.num_sessions,
+  a.total_page_clicks,
+  a.total_flight_discount,
+  a.total_hotel_discount,
+  a.total_flights_booked,
+  a.total_hotels_booked,
+  a.total_cancellations,
+  fd.total_checked_bags,
+  fd.destination_airport_lat,
+  fd.destination_airport_lon,
+  u.home_airport_lat,
+  u.home_airport_lon,
+  fl.seats,
+  h.rooms,
+  fd.departure_time,
+  fd.return_time,
+  ls.session_start,
+  ls.session_end,
+  ls.trip_id,
+  CASE
+    WHEN u.married = TRUE
+    AND u.has_children = TRUE
+    AND fl.seats > 2
+    AND fd.total_checked_bags > 2 THEN 'Family travelers'
+    WHEN EXTRACT(
+      YEAR
+      FROM
+        AGE (u.birthdate)
+    ) BETWEEN 30 AND 50
+    AND a.total_flights_booked + a.total_hotels_booked > 5
+    AND h.rooms > 0
+    AND h.rooms < 3 THEN 'Business travelers'
+    WHEN u.user_id IN (
+      SELECT
+        user_id
+      FROM
+        LuxuryTravelers
+    ) THEN 'Luxury travelers'
+    WHEN u.user_id IN (
+      SELECT
+        user_id
+      FROM
+        BudgetTravelers
+    ) THEN 'Budget travelers'
+    WHEN a.num_sessions > 10
+    AND a.total_cancellations > 0 THEN 'Unsure travelers'
+    ELSE 'Other travelers'
+  END AS customer_segment,
+  CASE
+    WHEN u.married = TRUE
+    AND u.has_children = TRUE
+    AND fl.seats > 2
+    AND fd.total_checked_bags > 2 THEN 'Free check In for bags'
+    WHEN EXTRACT(
+      YEAR
+      FROM
+        AGE (u.birthdate)
+    ) BETWEEN 30 AND 50
+    AND a.total_flights_booked + a.total_hotels_booked > 5
+    AND h.rooms > 0
+    AND h.rooms < 3 THEN 'Priority Boarding on the plane'
+    WHEN u.user_id IN (
+      SELECT
+        user_id
+      FROM
+        LuxuryTravelers
+    ) THEN 'Free transportation from
 the airport to the hotel'
-WHEN u.user_id IN (SELECT user_id FROM BudgetTravelers) THEN 'Exclusive discounts on
+    WHEN u.user_id IN (
+      SELECT
+        user_id
+      FROM
+        BudgetTravelers
+    ) THEN 'Exclusive discounts on
 flight and hotel bookings'
-WHEN a.num_sessions > 10 AND a.total_cancellations > 0 THEN 'Personalized travel planning
+    WHEN a.num_sessions > 10
+    AND a.total_cancellations > 0 THEN 'Personalized travel planning
 assistance'
-ELSE 'No perk'
-END AS customer_perk
-FROM users u
-INNER JOIN AggregatedSessions a ON u.user_id = a.user_id
-LEFT JOIN FlightsData fd ON u.user_id = fd.user_id
-LEFT JOIN LatestSessions ls ON u.user_id = ls.user_id
-LEFT JOIN TotalSeats fl ON u.user_id = fl.user_id
-LEFT JOIN TotalRooms h ON u.user_id = h.user_id;
+    ELSE 'No perk'
+  END AS customer_perk
+FROM
+  users u
+  INNER JOIN AggregatedSessions a ON u.user_id = a.user_id
+  LEFT JOIN FlightsData fd ON u.user_id = fd.user_id
+  LEFT JOIN LatestSessions ls ON u.user_id = ls.user_id
+  LEFT JOIN TotalSeats fl ON u.user_id = fl.user_id
+  LEFT JOIN TotalRooms h ON u.user_id = h.user_id;
