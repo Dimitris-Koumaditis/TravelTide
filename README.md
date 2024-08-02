@@ -1,4 +1,4 @@
-![Uploading TravelTide project.png…]()
+
 # TravelTide Project:
 
 TravelTide, an e-booking business, is a popular new participant in the internet travel sector. It has grown steadily since its inception during the tail end of the COVID-19 pandemic (2021-04), owing to its best-in-class data gathering and search technologies. According to consumer comments and industry analysts, TravelTide users have access to the greatest travel inventory available in the e-booking arena.
